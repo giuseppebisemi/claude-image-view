@@ -90,3 +90,37 @@ test('a pasted image shows without another keystroke and clears when the draft d
   expect(await after.find({ type: 'Image' })).toBeUndefined()
   expect(await after.find({ type: 'Text', text: 'engine band' })).toBeDefined()
 })
+
+test('a JPEG paste is converted to PNG once and drawn from the copy', async ($, on) => {
+  const clock = mock.clock(on)
+  const session = '/tmp/claude-501/-work/sess-jpeg'
+  const converted = `${session}/image-view/1.png`
+  const runs: string[][] = []
+  on('session.start', () => ({ cwd: '/work' }))
+  on('prompt.read', () => ({ value: { text: '[Image #1]', cursor: 10 } }))
+  on('env.get', () => ({ value: '/tmp/claude-501' }))
+  on('session.id', () => ({ value: 'sess-jpeg' }))
+  const entry = { size: 0, mtimeMs: 0, isLink: false }
+  on('fs.list', (_, e) => ({
+    value: e.path === `${session}/images` ? [{ name: '1.jpg', kind: 'file', ...entry }] : [{ name: '-work', kind: 'dir', ...entry }],
+  }))
+  on('fs.exists', (_, e) => ({
+    value: e.path === `${session}/images` || (e.path === converted && runs.some(argv => argv[0] === 'sips')),
+  }))
+  on('process.run', (_, e) => {
+    runs.push(e.argv)
+    return { value: { stdout: '', stderr: '', code: 0 } }
+  })
+  on('fs.read', () => ({ value: { base64: pngHead(452, 484) } }))
+  on('ui.render', () => ({ type: 'Text', props: {}, children: ['engine band'] }))
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(200)
+  await clock.advance(200)
+
+  expect(runs.filter(argv => argv[0] === 'sips')).toEqual([
+    ['sips', '-s', 'format', 'png', `${session}/images/1.jpg`, '--out', converted],
+  ])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Image' }))?.props).toMatchObject({ source: { file: converted, format: 'png' } })
+})

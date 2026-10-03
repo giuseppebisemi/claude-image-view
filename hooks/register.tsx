@@ -40,9 +40,28 @@ async function imagesDir($: EngineInterface): Promise<string | undefined> {
   return undefined
 }
 
+// A JPEG on the clipboard is cached as <n>.jpg, but kitty graphics only draws
+// PNG from a file, so non-PNG pastes are converted once with macOS sips into a side folder.
+async function pngPath($: EngineInterface, dir: string, n: number): Promise<string | undefined> {
+  const png = `${dir}/${n}.png`
+  if (await $.fs.exists(png)) return png
+  const entries = await $.fs.list(dir).catch(() => [])
+  const source = entries.find(entry => entry.kind !== 'dir' && entry.name.startsWith(`${n}.`))
+  if (source === undefined) return undefined
+  const outDir = `${dir.slice(0, dir.lastIndexOf('/'))}/image-view`
+  const out = `${outDir}/${n}.png`
+  if (!(await $.fs.exists(out))) {
+    await $.process.run(['mkdir', '-p', outDir]).catch(() => undefined)
+    await $.process
+      .run(['sips', '-s', 'format', 'png', `${dir}/${source.name}`, '--out', out])
+      .catch(() => undefined)
+  }
+  return (await $.fs.exists(out)) ? out : undefined
+}
+
 async function describe($: EngineInterface, dir: string | undefined, n: number): Promise<PastedImage> {
-  const path = `${dir}/${n}.png`
-  if (dir === undefined || !(await $.fs.exists(path))) return { n, path: null, size: null }
+  const path = dir === undefined ? undefined : await pngPath($, dir, n)
+  if (path === undefined) return { n, path: null, size: null }
   if (!sizes.has(path)) {
     const head = await $.fs.read(path, { as: 'bytes' }).then(
       ({ base64 }) => pngSize(base64),
